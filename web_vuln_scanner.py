@@ -1,70 +1,84 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
-SQL_PAYLOADS = ["' OR '1'='1", "'; DROP TABLE users; --", "\" OR \"1\"=\"1"]
-XSS_PAYLOADS = ["<script>alert(1)</script>", "\" onmouseover=alert(1) x=\""]
+SECURITY_HEADERS = [
+    "Content-Security-Policy",
+    "X-Frame-Options",
+    "X-XSS-Protection",
+    "Strict-Transport-Security",
+    "X-Content-Type-Options"
+]
+
+def check_https(url):
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        print("[!] Website is not using HTTPS.")
+    else:
+        print("[+] HTTPS is enabled.")
+
+def check_security_headers(response):
+    print("\n[+] Checking Security Headers...")
+    for header in SECURITY_HEADERS:
+        if header in response.headers:
+            print(f"[+] {header} is present.")
+        else:
+            print(f"[!] {header} is missing.")
 
 def get_all_forms(url):
-    soup = BeautifulSoup(requests.get(url).content, "html.parser")
-    return soup.find_all("form")
+    try:
+        response = requests.get(url, timeout=5)
+        soup = BeautifulSoup(response.content, "html.parser")
+        forms = soup.find_all("form")
+        print(f"\n[+] Detected {len(forms)} form(s) on page.")
+        return forms
+    except requests.RequestException as e:
+        print(f"[!] Failed to retrieve page: {e}")
+        return []
 
 def get_form_details(form):
     details = {}
     action = form.attrs.get("action")
     method = form.attrs.get("method", "get").lower()
     inputs = []
+
     for input_tag in form.find_all("input"):
         input_type = input_tag.attrs.get("type", "text")
         name = input_tag.attrs.get("name")
         inputs.append({"type": input_type, "name": name})
+
     details["action"] = action
     details["method"] = method
     details["inputs"] = inputs
     return details
 
-def is_vulnerable(response):
-    errors = ["sql syntax", "unexpected end of SQL", "you have an error in your sql"]
-    for error in errors:
-        if error.lower() in response.text.lower():
-            return True
-    return False
-
-def test_sql_injection(url):
-    print("[+] Testing SQL Injection...")
-    for payload in SQL_PAYLOADS:
-        target_url = f"{url}?test={payload}"
-        res = requests.get(target_url)
-        if is_vulnerable(res):
-            print(f"[!] SQL Injection vulnerability found with payload: {payload}")
-            return
-    print("[-] No SQL Injection vulnerability detected.")
-
-def test_xss_in_forms(url):
-    print("[+] Testing XSS in forms...")
-    forms = get_all_forms(url)
-    for form in forms:
-        form_details = get_form_details(form)
-        for payload in XSS_PAYLOADS:
-            data = {}
-            for input in form_details["inputs"]:
-                if input["name"]:
-                    data[input["name"]] = payload
-            target_url = urljoin(url, form_details["action"])
-            if form_details["method"] == "post":
-                res = requests.post(target_url, data=data)
-            else:
-                res = requests.get(target_url, params=data)
-            if payload in res.text:
-                print(f"[!] XSS vulnerability found with payload: {payload}")
-                return
-    print("[-] No XSS vulnerability detected.")
+def analyze_forms(forms):
+    print("\n[+] Analyzing Forms...")
+    for i, form in enumerate(forms, start=1):
+        details = get_form_details(form)
+        print(f"\n--- Form #{i} ---")
+        print(f"Action: {details['action']}")
+        print(f"Method: {details['method'].upper()}")
+        print("Inputs:")
+        for input_field in details["inputs"]:
+            print(f"  - Name: {input_field['name']}, Type: {input_field['type']}")
 
 def scan(url):
-    print(f"Scanning {url}")
-    test_sql_injection(url)
-    test_xss_in_forms(url)
+    print(f"\nScanning: {url}")
+    try:
+        response = requests.get(url, timeout=5)
+    except requests.RequestException as e:
+        print(f"[!] Could not connect: {e}")
+        return
+
+    check_https(url)
+    check_security_headers(response)
+
+    forms = get_all_forms(url)
+    analyze_forms(forms)
+
+    print("\n[✓] Scan completed.")
 
 if __name__ == "__main__":
-    target = input("Enter URL to scan (e.g., http://testphp.vulnweb.com): ")
+    target = input("Enter URL (e.g., https://example.com): ")
     scan(target)
